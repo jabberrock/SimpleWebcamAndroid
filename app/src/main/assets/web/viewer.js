@@ -22,6 +22,13 @@
 
   window.addEventListener('pagehide', closePeerConnection, false);
 
+  let reconnectTimeout = null;
+
+  function scheduleRetry() {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = setTimeout(connect, 1000);
+  }
+
   function waitForIceGatheringComplete(pc) {
     if (pc.iceGatheringState === 'complete') {
       return Promise.resolve();
@@ -39,14 +46,22 @@
   }
 
   async function connect() {
-    closePeerConnection();
-
     const video = document.getElementById('video');
     if (!video) {
       console.error('No #video element');
       return;
     }
 
+    try {
+      await createPeerConnection()
+    } catch (e) {
+      console.error(e);
+      closePeerConnection();
+      scheduleRetry();
+    }
+  }
+
+  async function createPeerConnection() {
     const pc = new RTCPeerConnection({ iceServers: [] });
     activePc = pc;
 
@@ -71,7 +86,8 @@
 
     pc.addEventListener('connectionstatechange', function () {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        video.srcObject = null;
+        closePeerConnection();
+        scheduleRetry();
       }
     });
 
@@ -96,8 +112,5 @@
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
   }
 
-  connect().catch(function (e) {
-    console.error(e);
-    closePeerConnection();
-  });
+  connect();
 })();
