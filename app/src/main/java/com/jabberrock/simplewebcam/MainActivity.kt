@@ -54,6 +54,7 @@ class MainActivity : ComponentActivity() {
 
     private val webRTCManager by lazy { WebRTCManager(applicationContext) }
     private val webServer by lazy { WebServer(WEB_SERVER_PORT, applicationContext, webRTCManager) }
+    private val mdnsPublisher by lazy { MdnsPublisher(applicationContext, WEB_SERVER_PORT) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,11 +64,13 @@ class MainActivity : ComponentActivity() {
             override fun onStart(owner: LifecycleOwner) {
                 webRTCManager.startOn(owner.lifecycleScope)
                 webServer.startOn(owner.lifecycleScope)
+                mdnsPublisher.startOn(owner.lifecycleScope)
             }
 
             override fun onStop(owner: LifecycleOwner) {
                 webRTCManager.cancel()
                 webServer.cancel()
+                mdnsPublisher.cancel()
             }
         })
 
