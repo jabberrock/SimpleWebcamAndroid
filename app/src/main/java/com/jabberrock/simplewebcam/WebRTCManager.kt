@@ -7,6 +7,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -34,6 +37,9 @@ import kotlin.time.Duration.Companion.seconds
 import org.webrtc.RendererCommon
 
 class WebRTCManager(private val context: Context) {
+
+    private val _isActive = MutableStateFlow(false)
+    val isActive = _isActive.asStateFlow()
 
     private val eglBase = EglBase.create()
     private val eglBaseContext = eglBase.eglBaseContext
@@ -131,6 +137,7 @@ class WebRTCManager(private val context: Context) {
         while (true) {
             val connectRequest = connectRequest.receive()
             try {
+                _isActive.value = true
                 runVideoCapturer(connectRequest, peerConnectionFactory)
             } catch (e: CancellationException) {
                 throw e
@@ -139,6 +146,7 @@ class WebRTCManager(private val context: Context) {
                 // Swallow exception
             } finally {
                 connectRequest.onAnswerSdp.cancel()
+                _isActive.value = false
             }
         }
     }

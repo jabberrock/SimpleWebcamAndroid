@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -85,6 +86,11 @@ private fun CameraApp(webRTCManager: WebRTCManager) {
 
 @Composable
 private fun CameraPreview(webRTCManager: WebRTCManager) {
+    var isActive by remember { mutableStateOf(false) }
+    LaunchedEffect(webRTCManager) {
+        webRTCManager.isActive.collect { isActive = it }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
@@ -100,5 +106,21 @@ private fun CameraPreview(webRTCManager: WebRTCManager) {
                 it.release()
             },
         )
+
+        if (!isActive) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.0f),
+                                    Color.Black.copy(alpha = 1.0f),
+                                ),
+                            ),
+                        ),
+            )
+        }
     }
 }
