@@ -32,7 +32,7 @@ import org.webrtc.SurfaceViewRenderer
 class MainActivity : ComponentActivity() {
 
     private val webRTCManager by lazy { WebRTCManager(applicationContext) }
-    private val webServer by lazy { WebServer(webRTCManager) }
+    private val webServer by lazy { WebServer(applicationContext, webRTCManager) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
