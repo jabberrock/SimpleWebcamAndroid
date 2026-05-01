@@ -1,6 +1,27 @@
 (function () {
   'use strict';
 
+  /** @type {RTCPeerConnection | null} */
+  let activePc = null;
+
+  function closePeerConnection() {
+    const pc = activePc;
+    activePc = null;
+    if (pc) {
+      try {
+        pc.close();
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    const video = document.getElementById('video');
+    if (video) {
+      video.srcObject = null;
+    }
+  }
+
+  window.addEventListener('pagehide', closePeerConnection, false);
+
   function waitForIceGatheringComplete(pc) {
     if (pc.iceGatheringState === 'complete') {
       return Promise.resolve();
@@ -18,6 +39,8 @@
   }
 
   async function connect() {
+    closePeerConnection();
+
     const video = document.getElementById('video');
     if (!video) {
       console.error('No #video element');
@@ -25,8 +48,12 @@
     }
 
     const pc = new RTCPeerConnection({ iceServers: [] });
+    activePc = pc;
 
     pc.addTransceiver('video', { direction: 'recvonly' });
+
+    const keepliveDc = pc.createDataChannel('keeplive');
+    keepliveDc.addEventListener('close', closePeerConnection);
 
     pc.addEventListener('track', function (ev) {
       const stream =
@@ -69,7 +96,8 @@
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
   }
 
-  connect().catch((e) => {
+  connect().catch(function (e) {
     console.error(e);
+    closePeerConnection();
   });
 })();
