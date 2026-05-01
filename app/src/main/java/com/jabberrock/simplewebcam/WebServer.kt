@@ -27,7 +27,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import java.util.concurrent.atomic.AtomicReference
 
-class WebServer {
+class WebServer(
+    private val webRTCManager: WebRTCManager,
+) {
     private val job = AtomicReference<Job?>(null)
 
     fun startOn(scope: CoroutineScope) {
@@ -103,6 +105,7 @@ class WebServer {
     private enum class CustomErrorKey(val statusCode: HttpStatusCode, val message: String) {
         UNKNOWN(HttpStatusCode.InternalServerError, "An unknown error occurred"),
         INVALID_REQUEST_BODY(HttpStatusCode.BadRequest, "Invalid request body"),
+        WEBRTC_SESSION_ALREADY_ACTIVE(HttpStatusCode.Conflict, "A WebRTC session is already active"),
     }
 
     private class CustomException(val key: CustomErrorKey, cause: Throwable? = null): Exception(key.message, cause)
@@ -126,11 +129,14 @@ class WebServer {
                 throw CustomException(CustomErrorKey.INVALID_REQUEST_BODY, e)
             }
 
-        if (request.offerSdp != "OFFER SDP") {
-            throw CustomException(CustomErrorKey.INVALID_REQUEST_BODY)
+        val answerSdp: String
+        try {
+            answerSdp = webRTCManager.connect(request.offerSdp)
+        } catch (e: WebRTCManager.WebRTCSessionAlreadyActive) {
+            throw CustomException(CustomErrorKey.WEBRTC_SESSION_ALREADY_ACTIVE, e)
         }
 
-        respond(HttpStatusCode.OK, ConnectResponse("ANSWER SDP"))
+        respond(HttpStatusCode.OK, ConnectResponse(answerSdp))
     }
 
     companion object {
