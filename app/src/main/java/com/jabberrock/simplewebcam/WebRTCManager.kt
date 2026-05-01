@@ -194,6 +194,17 @@ class WebRTCManager(private val context: Context) {
             previewSink?.let { videoTrack.addSink(it) }
             peerConnection.addTrack(videoTrack)
 
+            val dataChannel = peerConnection.createDataChannel("keepalive", DataChannel.Init())
+            dataChannel.registerObserver(object : DataChannel.Observer {
+                override fun onBufferedAmountChange(p0: Long) {}
+                override fun onStateChange() {
+                    if (dataChannel.state() == DataChannel.State.CLOSED) {
+                        peerConnection.close()
+                    }
+                }
+                override fun onMessage(p0: DataChannel.Buffer?) {}
+            })
+
             Log.i(TAG, "Setting offer SDP...")
             val offer = SessionDescription(SessionDescription.Type.OFFER, connectRequest.offerSdp)
             awaitSdpSet { peerConnection.setRemoteDescription(it, offer) }
