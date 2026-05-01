@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.text.Charsets
 
 class WebServer(
+    private val port: Int,
     private val context: Context,
     private val webRTCManager: WebRTCManager,
 ) {
@@ -99,7 +100,7 @@ class WebServer(
         val engine =
             embeddedServer(
                 factory = CIO,
-                port = DEFAULT_PORT,
+                port = port,
                 module = { module() },
             )
 
@@ -156,7 +157,6 @@ class WebServer(
 
     companion object {
         private const val TAG = "WebServer"
-        private const val DEFAULT_PORT = 8080
         private const val STOP_GRACE_PERIOD_MS = 500L
         private const val STOP_TIMEOUT_MS = 3_000L
         private const val WEB_INDEX_HTML = "web/index.html"
