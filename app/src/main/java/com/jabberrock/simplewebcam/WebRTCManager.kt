@@ -44,7 +44,10 @@ import kotlin.coroutines.resumeWithException
 import kotlin.math.min
 import kotlin.time.Duration.Companion.seconds
 
-class WebRTCManager(private val context: Context) {
+class WebRTCManager(
+    private val context: Context,
+    private val rotationSensor: RotationSensor,
+) {
 
     private val _isActive = MutableStateFlow(false)
     val isActive = _isActive.asStateFlow()
@@ -203,7 +206,8 @@ class WebRTCManager(private val context: Context) {
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
 
-        val observer = PeerConnectionHandler(currentCoroutineContext(), cameraIntrinsic)
+        val observer =
+            PeerConnectionHandler(currentCoroutineContext(), cameraIntrinsic, rotationSensor)
         val peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, observer)
             ?: error("Failed to create peer connection")
         this.peerConnection.set(peerConnection)
@@ -342,6 +346,7 @@ class WebRTCManager(private val context: Context) {
     private class PeerConnectionHandler(
         private val coroutineContext: CoroutineContext,
         private val cameraIntrinsic: CameraIntrinsicJSON,
+        private val rotationSensor: RotationSensor,
     ) : PeerConnection.Observer {
         var peerConnection: PeerConnection? = null
 
@@ -388,7 +393,11 @@ class WebRTCManager(private val context: Context) {
                             DataChannel.State.OPEN -> {
                                 if (dataChannel.state() == DataChannel.State.OPEN) {
                                     CoroutineScope(coroutineContext).launch {
-                                        runVisionDataChannel(dataChannel, cameraIntrinsic)
+                                        runVisionDataChannel(
+                                            dataChannel,
+                                            cameraIntrinsic,
+                                            rotationSensor,
+                                        )
                                     }
                                 }
                             }
@@ -426,9 +435,20 @@ class WebRTCManager(private val context: Context) {
             }
         }
 
-        private suspend fun runVisionDataChannel(dataChannel: DataChannel, cameraIntrinsic: CameraIntrinsicJSON) {
+        private suspend fun runVisionDataChannel(
+            dataChannel: DataChannel,
+            cameraIntrinsic: CameraIntrinsicJSON,
+            rotationSensor: RotationSensor,
+        ) {
             while (currentCoroutineContext().isActive) {
-                val payload = VisionJsonSerializer.encodeToString(VisionJSON(cameraIntrinsic))
+                val payload =
+                    VisionJsonSerializer.encodeToString(
+                        VisionJSON(
+                            cameraIntrinsic = cameraIntrinsic,
+                            deviceToArbitraryZVertical =
+                                rotationSensor.deviceToArbitraryZVertical.value,
+                        ),
+                    )
                 dataChannel.send(
                     DataChannel.Buffer(
                         ByteBuffer.wrap(payload.toByteArray(StandardCharsets.UTF_8)),
@@ -471,6 +491,7 @@ class WebRTCManager(private val context: Context) {
         @Serializable
         private data class VisionJSON(
             val cameraIntrinsic: CameraIntrinsicJSON,
+            val deviceToArbitraryZVertical: Quaternion,
         )
 
         @Serializable

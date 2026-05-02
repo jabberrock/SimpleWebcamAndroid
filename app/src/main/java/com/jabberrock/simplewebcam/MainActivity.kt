@@ -52,7 +52,8 @@ internal const val WEB_SERVER_PORT = 8080
 
 class MainActivity : ComponentActivity() {
 
-    private val webRTCManager by lazy { WebRTCManager(applicationContext) }
+    private val rotationSensor by lazy { RotationSensor(applicationContext) }
+    private val webRTCManager by lazy { WebRTCManager(applicationContext, rotationSensor) }
     private val webServer by lazy { WebServer(WEB_SERVER_PORT, applicationContext, webRTCManager) }
     private val mdnsPublisher by lazy { MdnsPublisher(applicationContext, WEB_SERVER_PORT) }
 
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
 
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
+                rotationSensor.start()
                 webRTCManager.startOn(owner.lifecycleScope)
                 webServer.startOn(owner.lifecycleScope)
                 mdnsPublisher.startOn(owner.lifecycleScope)
@@ -71,6 +73,7 @@ class MainActivity : ComponentActivity() {
                 webRTCManager.cancel()
                 webServer.cancel()
                 mdnsPublisher.cancel()
+                rotationSensor.stop()
             }
         })
 
