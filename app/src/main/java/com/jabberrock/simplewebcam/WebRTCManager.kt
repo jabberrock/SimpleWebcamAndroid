@@ -1,15 +1,19 @@
 package com.jabberrock.simplewebcam
 
 import android.content.Context
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -27,14 +31,18 @@ import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
-import org.webrtc.VideoCapturer
 import org.webrtc.VideoSink
 import org.webrtc.VideoSource
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.min
 import kotlin.time.Duration.Companion.seconds
-import org.webrtc.RendererCommon
 
 class WebRTCManager(private val context: Context) {
 
@@ -157,7 +165,11 @@ class WebRTCManager(private val context: Context) {
     ) {
         val videoSource = peerConnectionFactory.createVideoSource(true)
 
-        val videoCapturer = createVideoCapturer()
+        val cameras = Camera2Enumerator(context)
+        val cameraId = cameras.deviceNames.firstOrNull { cameras.isFrontFacing(it) }
+            ?: error("Failed to find camera")
+
+        val videoCapturer = cameras.createCapturer(cameraId, null)
         val surfaceTextureHelper =
             SurfaceTextureHelper.create("CaptureThread", eglBaseContext)
         videoCapturer.initialize(
@@ -166,10 +178,12 @@ class WebRTCManager(private val context: Context) {
             videoSource.capturerObserver
         )
 
+        val cameraIntrinsic = cameraIntrinsicsForCamera(cameraId, VIDEO_WIDTH, VIDEO_HEIGHT)
+
         Log.i(TAG, "Starting video capturer...")
         videoCapturer.startCapture(VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS)
         try {
-            runPeerConnection(connectRequest, peerConnectionFactory, videoSource)
+            runPeerConnection(connectRequest, peerConnectionFactory, videoSource, cameraIntrinsic)
         } finally {
             videoCapturer.stopCapture()
             videoCapturer.dispose()
@@ -180,7 +194,8 @@ class WebRTCManager(private val context: Context) {
     private suspend fun runPeerConnection(
         connectRequest: ConnectRequest,
         peerConnectionFactory: PeerConnectionFactory,
-        videoSource: VideoSource
+        videoSource: VideoSource,
+        cameraIntrinsic: CameraIntrinsicJSON
     ) {
         Log.i(TAG, "Creating peer connection...")
 
@@ -188,7 +203,7 @@ class WebRTCManager(private val context: Context) {
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
 
-        val observer = PeerConnectionHandler()
+        val observer = PeerConnectionHandler(currentCoroutineContext(), cameraIntrinsic)
         val peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, observer)
             ?: error("Failed to create peer connection")
         this.peerConnection.set(peerConnection)
@@ -196,26 +211,15 @@ class WebRTCManager(private val context: Context) {
         observer.peerConnection = peerConnection
 
         try {
+            Log.i(TAG, "Setting offer SDP...")
+            val offer = SessionDescription(SessionDescription.Type.OFFER, connectRequest.offerSdp)
+            awaitSdpSet { peerConnection.setRemoteDescription(it, offer) }
+
             peerConnection.setBitrate(null, START_BITRATE_BPS, MAX_BITRATE_BPS)
 
             val videoTrack = peerConnectionFactory.createVideoTrack("video0", videoSource)
             previewSink?.let { videoTrack.addSink(it) }
             peerConnection.addTrack(videoTrack)
-
-            val dataChannel = peerConnection.createDataChannel("keepalive", DataChannel.Init())
-            dataChannel.registerObserver(object : DataChannel.Observer {
-                override fun onBufferedAmountChange(p0: Long) {}
-                override fun onStateChange() {
-                    if (dataChannel.state() == DataChannel.State.CLOSED) {
-                        peerConnection.close()
-                    }
-                }
-                override fun onMessage(p0: DataChannel.Buffer?) {}
-            })
-
-            Log.i(TAG, "Setting offer SDP...")
-            val offer = SessionDescription(SessionDescription.Type.OFFER, connectRequest.offerSdp)
-            awaitSdpSet { peerConnection.setRemoteDescription(it, offer) }
 
             Log.i(TAG, "Creating answer SDP...")
             val answer = awaitSdpCreate { peerConnection.createAnswer(it, MediaConstraints()) }
@@ -245,15 +249,70 @@ class WebRTCManager(private val context: Context) {
         }
     }
 
-    private fun createVideoCapturer(): VideoCapturer {
-        val cameras = Camera2Enumerator(context)
+    private fun cameraIntrinsicsForCamera(
+        cameraId: String,
+        imageWidth: Int,
+        imageHeight: Int,
+    ): CameraIntrinsicJSON {
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val characteristics = cameraManager.getCameraCharacteristics(cameraId)
 
-        val frontCameraId = cameras.deviceNames.firstOrNull { cameras.isFrontFacing(it) }
-        if (frontCameraId == null) {
-            error("Failed to find camera")
+        val calibration = characteristics.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION)
+            ?: error("Intrinsic calibration unavailable")
+        val active = characteristics.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+            ?: error("PRE_CORRECTION_ACTIVE_ARRAY unavailable")
+
+        if (calibration.size < 4) {
+            error("Intrinsic calibration malformed")
         }
 
-        return cameras.createCapturer(frontCameraId, null)
+        val iw = imageWidth.toDouble()
+        val ih = imageHeight.toDouble()
+
+        val activeFx = calibration[0].toDouble()
+        val activeFy = calibration[1].toDouble()
+        val activeTx = calibration[2].toDouble()
+        val activeTy = calibration[3].toDouble()
+
+        val activeWidth = active.width().toDouble()
+        val activeHeight = active.height().toDouble()
+
+        //
+        // https://source.android.com/docs/core/camera/camera3_crop_reprocess
+        // > In all cases, the stream crop must be centered within the full crop
+        // > region, and each stream is only either cropped horizontally or
+        // > vertical relative to the full crop region, never both.
+        //
+        // This means that the real sensor area that is used for the image is
+        // centered within the active array, and scaled to fit the active array.
+        //
+        val sensorPixelsPerImagePixel = min(activeWidth / iw, activeHeight / ih)
+
+        val imageFx = activeFx / sensorPixelsPerImagePixel
+        val imageFy = activeFy / sensorPixelsPerImagePixel
+
+        //
+        // https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics#LENS_INTRINSIC_CALIBRATION
+        // > Note that the coordinate system for this transform is the
+        // > android.sensor.info.preCorrectionActiveArraySize system, where
+        // > (0,0) is the top-left of the preCorrectionActiveArraySize
+        // > rectangle.
+        //
+        // After we scale to fit the image within the active array, the top-left
+        // of the real sensor region may not be (0,0) of the active array. So we
+        // need to remove that offset from tx and ty.
+        //
+        val imageTx = activeTx / sensorPixelsPerImagePixel - (activeWidth / sensorPixelsPerImagePixel - imageWidth) * 0.5
+        val imageTy = activeTy / sensorPixelsPerImagePixel - (activeHeight / sensorPixelsPerImagePixel - imageHeight) * 0.5
+
+        return CameraIntrinsicJSON(
+            fx = imageFx,
+            fy = imageFy,
+            tx = imageTx,
+            ty = imageTy,
+            width = imageWidth,
+            height = imageHeight,
+        )
     }
 
     private suspend fun awaitSdpSet(action: (SdpObserver) -> Unit) {
@@ -280,7 +339,10 @@ class WebRTCManager(private val context: Context) {
         }
     }
 
-    private class PeerConnectionHandler : PeerConnection.Observer {
+    private class PeerConnectionHandler(
+        private val coroutineContext: CoroutineContext,
+        private val cameraIntrinsic: CameraIntrinsicJSON,
+    ) : PeerConnection.Observer {
         var peerConnection: PeerConnection? = null
 
         val iceGatheringComplete = CompletableDeferred<Unit>()
@@ -315,7 +377,34 @@ class WebRTCManager(private val context: Context) {
         override fun onRemoveStream(p0: MediaStream?) {
         }
 
-        override fun onDataChannel(p0: DataChannel?) {
+        override fun onDataChannel(dataChannel: DataChannel) {
+            if (dataChannel.label() == VISION_DATA_CHANNEL) {
+                dataChannel.registerObserver(object : DataChannel.Observer {
+                    override fun onBufferedAmountChange(p0: Long) {
+                    }
+
+                    override fun onStateChange() {
+                        when (dataChannel.state()) {
+                            DataChannel.State.OPEN -> {
+                                if (dataChannel.state() == DataChannel.State.OPEN) {
+                                    CoroutineScope(coroutineContext).launch {
+                                        runVisionDataChannel(dataChannel, cameraIntrinsic)
+                                    }
+                                }
+                            }
+
+                            DataChannel.State.CLOSED -> {
+                                peerConnection?.close()
+                            }
+
+                            else -> {}
+                        }
+                    }
+
+                    override fun onMessage(p0: DataChannel.Buffer?) {
+                    }
+                })
+            }
         }
 
         override fun onRenegotiationNeeded() {
@@ -336,6 +425,19 @@ class WebRTCManager(private val context: Context) {
                 else -> {}
             }
         }
+
+        private suspend fun runVisionDataChannel(dataChannel: DataChannel, cameraIntrinsic: CameraIntrinsicJSON) {
+            while (currentCoroutineContext().isActive) {
+                val payload = VisionJsonSerializer.encodeToString(VisionJSON(cameraIntrinsic))
+                dataChannel.send(
+                    DataChannel.Buffer(
+                        ByteBuffer.wrap(payload.toByteArray(StandardCharsets.UTF_8)),
+                        false,
+                    )
+                )
+                delay(SEND_VISION_DATA_INTERVAL)
+            }
+        }
     }
 
     companion object {
@@ -346,6 +448,9 @@ class WebRTCManager(private val context: Context) {
         private const val START_BITRATE_BPS = 2_000_000
         private const val MAX_BITRATE_BPS = 4_000_000
         private val ICE_GATHERING_TIMEOUT = 5.seconds
+        private const val VISION_DATA_CHANNEL = "vision"
+        private val SEND_VISION_DATA_INTERVAL = 1.seconds
+        private const val MIN_CALIBRATION_ABS = 1e-12
 
         private var shouldInitNative = true
 
@@ -360,5 +465,22 @@ class WebRTCManager(private val context: Context) {
                 shouldInitNative = false
             }
         }
+
+        private val VisionJsonSerializer = Json.Default
+
+        @Serializable
+        private data class VisionJSON(
+            val cameraIntrinsic: CameraIntrinsicJSON,
+        )
+
+        @Serializable
+        private data class CameraIntrinsicJSON(
+            val fx: Double,
+            val fy: Double,
+            val tx: Double,
+            val ty: Double,
+            val width: Int,
+            val height: Int,
+        )
     }
 }

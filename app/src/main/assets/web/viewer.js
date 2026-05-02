@@ -67,8 +67,16 @@
 
     pc.addTransceiver('video', { direction: 'recvonly' });
 
-    const keepliveDc = pc.createDataChannel('keeplive');
-    keepliveDc.addEventListener('close', closePeerConnection);
+    const visionDc = pc.createDataChannel('vision');
+    visionDc.addEventListener('message', function (ev) {
+      if (typeof ev.data === 'string') {
+        console.log('[datachannel]', visionDc.label, JSON.parse(ev.data));
+      }
+    });
+    visionDc.addEventListener('close', function() {
+      closePeerConnection();
+      scheduleRetry();
+    });
 
     pc.addEventListener('track', function (ev) {
       const stream =
