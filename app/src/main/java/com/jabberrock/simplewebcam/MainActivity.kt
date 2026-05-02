@@ -7,7 +7,10 @@ import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
 import android.os.Bundle
+import android.util.Log
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -124,6 +127,17 @@ private fun CameraPreview(webRTCManager: WebRTCManager) {
     var isActive by remember { mutableStateOf(false) }
     LaunchedEffect(webRTCManager) {
         webRTCManager.isActive.collect { isActive = it }
+    }
+
+    val activity = LocalActivity.current
+    DisposableEffect(isActive, activity) {
+        val window = activity?.window
+        if (isActive) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
