@@ -58,7 +58,7 @@ PWA offers a simpler one-click solution.
 
 ## mDNS
 
-Simple Webcam is discoverable over mDNS as `_simple_webcam._tcp`.
+Simple Webcam is discoverable over mDNS as `_simple-webcam._tcp`.
 
 ## Computer Vision
 

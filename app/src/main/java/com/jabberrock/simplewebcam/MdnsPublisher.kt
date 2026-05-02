@@ -89,7 +89,7 @@ class MdnsPublisher(
 
     companion object {
         private const val TAG = "MdnsPublisher"
-        private const val SERVICE_TYPE = "_simple_webcam._tcp."
+        private const val SERVICE_TYPE = "_simple-webcam._tcp."
         private const val SERVICE_INSTANCE_NAME = "Simple Webcam"
     }
 }
