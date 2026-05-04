@@ -207,7 +207,7 @@ class WebRTCManager(
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
 
         val observer =
-            PeerConnectionHandler(currentCoroutineContext(), cameraIntrinsic, rotationSensor)
+            PeerConnectionHandler(this, cameraIntrinsic, currentCoroutineContext())
         val peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, observer)
             ?: error("Failed to create peer connection")
         this.peerConnection.set(peerConnection)
@@ -344,9 +344,9 @@ class WebRTCManager(
     }
 
     private class PeerConnectionHandler(
-        private val coroutineContext: CoroutineContext,
+        private val self: WebRTCManager,
         private val cameraIntrinsic: CameraIntrinsicJSON,
-        private val rotationSensor: RotationSensor,
+        private val coroutineContext: CoroutineContext,
     ) : PeerConnection.Observer {
         var peerConnection: PeerConnection? = null
 
@@ -383,36 +383,15 @@ class WebRTCManager(
         }
 
         override fun onDataChannel(dataChannel: DataChannel) {
+            Log.i(TAG, "Data channel ${dataChannel.label()} connected")
+
             if (dataChannel.label() == VISION_DATA_CHANNEL) {
-                dataChannel.registerObserver(object : DataChannel.Observer {
-                    override fun onBufferedAmountChange(p0: Long) {
-                    }
-
-                    override fun onStateChange() {
-                        when (dataChannel.state()) {
-                            DataChannel.State.OPEN -> {
-                                if (dataChannel.state() == DataChannel.State.OPEN) {
-                                    CoroutineScope(coroutineContext).launch {
-                                        runVisionDataChannel(
-                                            dataChannel,
-                                            cameraIntrinsic,
-                                            rotationSensor,
-                                        )
-                                    }
-                                }
-                            }
-
-                            DataChannel.State.CLOSED -> {
-                                peerConnection?.close()
-                            }
-
-                            else -> {}
-                        }
-                    }
-
-                    override fun onMessage(p0: DataChannel.Buffer?) {
-                    }
-                })
+                dataChannel.registerObserver(
+                    VisionDataChannelHandler(self, dataChannel, cameraIntrinsic, coroutineContext))
+            } else {
+                dataChannel.registerObserver(
+                    DataChannelHandler(self, dataChannel)
+                )
             }
         }
 
@@ -434,11 +413,39 @@ class WebRTCManager(
                 else -> {}
             }
         }
+    }
+
+    private class VisionDataChannelHandler(
+        self: WebRTCManager,
+        dataChannel: DataChannel,
+        private val cameraIntrinsic: CameraIntrinsicJSON,
+        private val coroutineContext: CoroutineContext,
+    ) : DataChannelHandler(self, dataChannel) {
+
+        override fun onBufferedAmountChange(p0: Long) {
+            // Do nothing
+        }
+
+        override fun onStateChange() {
+            super.onStateChange()
+
+            if (dataChannel.state() == DataChannel.State.OPEN) {
+                CoroutineScope(coroutineContext).launch {
+                    runVisionDataChannel(
+                        dataChannel,
+                        cameraIntrinsic,
+                    )
+                }
+            }
+        }
+
+        override fun onMessage(p0: DataChannel.Buffer?) {
+            // Do nothing
+        }
 
         private suspend fun runVisionDataChannel(
             dataChannel: DataChannel,
             cameraIntrinsic: CameraIntrinsicJSON,
-            rotationSensor: RotationSensor,
         ) {
             while (currentCoroutineContext().isActive) {
                 val payload =
@@ -446,7 +453,7 @@ class WebRTCManager(
                         VisionJSON(
                             cameraIntrinsic = cameraIntrinsic,
                             deviceToArbitraryZVertical =
-                                rotationSensor.deviceToArbitraryZVertical.value,
+                                self.rotationSensor.deviceToArbitraryZVertical.value,
                         ),
                     )
                 dataChannel.send(
@@ -460,6 +467,27 @@ class WebRTCManager(
         }
     }
 
+    private open class DataChannelHandler(
+        val self: WebRTCManager,
+        val dataChannel: DataChannel,
+    ) : DataChannel.Observer {
+
+        override fun onBufferedAmountChange(p0: Long) {
+            // Do nothing
+        }
+
+        override fun onStateChange() {
+            if (dataChannel.state() == DataChannel.State.CLOSED) {
+                val peerConnection = self.peerConnection.get()
+                peerConnection?.close()
+            }
+        }
+
+        override fun onMessage(p0: DataChannel.Buffer?) {
+            // Do nothing
+        }
+    }
+
     companion object {
         private const val TAG = "WebRTCManager"
         private const val VIDEO_WIDTH = 1280
@@ -470,7 +498,6 @@ class WebRTCManager(
         private val ICE_GATHERING_TIMEOUT = 5.seconds
         private const val VISION_DATA_CHANNEL = "vision"
         private val SEND_VISION_DATA_INTERVAL = 1.seconds
-        private const val MIN_CALIBRATION_ABS = 1e-12
 
         private var shouldInitNative = true
 
