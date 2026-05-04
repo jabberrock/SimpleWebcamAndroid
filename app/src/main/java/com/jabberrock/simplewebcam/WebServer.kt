@@ -2,14 +2,17 @@ package com.jabberrock.simplewebcam
 
 import android.content.Context
 import android.util.Log
+import io.ktor.http.CacheControl
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.CachingOptions
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.plugins.cachingheaders.CachingHeaders
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.calllogging.processingTimeMillis
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
@@ -69,6 +72,11 @@ class WebServer(
                 val msg = "${call.request.httpMethod.value} ${call.request.uri} -> ${call.response.status()} (${call.processingTimeMillis()} ms)"
                 Log.i(TAG, msg)
                 msg
+            }
+        }
+        install(CachingHeaders) {
+            options { call, content ->
+                CachingOptions(CacheControl.NoCache(CacheControl.Visibility.Private))
             }
         }
         install(StatusPages) {
