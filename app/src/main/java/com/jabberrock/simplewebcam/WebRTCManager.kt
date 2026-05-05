@@ -17,7 +17,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
-import org.webrtc.Camera2Enumerator
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -168,11 +167,13 @@ class WebRTCManager(
     ) {
         val videoSource = peerConnectionFactory.createVideoSource(true)
 
-        val cameras = Camera2Enumerator(context)
-        val cameraId = cameras.deviceNames.firstOrNull { cameras.isFrontFacing(it) }
-            ?: error("Failed to find camera")
+        val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+            cameraManager.getCameraCharacteristics(id)
+                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_FRONT
+        } ?: error("Failed to find camera")
 
-        val videoCapturer = cameras.createCapturer(cameraId, null)
+        val videoCapturer = CameraCapturer(context, cameraId)
         val surfaceTextureHelper =
             SurfaceTextureHelper.create("CaptureThread", eglBaseContext)
         videoCapturer.initialize(
