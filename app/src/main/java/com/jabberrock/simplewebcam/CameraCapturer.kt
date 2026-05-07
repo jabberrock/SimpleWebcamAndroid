@@ -138,7 +138,7 @@ class CameraCapturer(
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
-                    val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                    val builder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                     builder.addTarget(surface)
                     builder.set(
                         CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,

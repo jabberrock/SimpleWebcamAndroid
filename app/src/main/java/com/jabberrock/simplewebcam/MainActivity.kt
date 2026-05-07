@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +52,7 @@ import org.webrtc.SurfaceViewRenderer
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.Collections
+import java.util.Locale
 
 internal const val WEB_SERVER_PORT = 8080
 
@@ -90,6 +93,22 @@ class MainActivity : ComponentActivity() {
                                 .align(Alignment.TopStart)
                                 .statusBarsPadding()
                                 .padding(start = 12.dp, top = 8.dp),
+                    )
+                    WebRtcFpsBadge(
+                        webRTCManager = webRTCManager,
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .statusBarsPadding()
+                                .padding(end = 12.dp, top = 8.dp),
+                    )
+                    RotationQuaternionBadge(
+                        rotationSensor = rotationSensor,
+                        modifier =
+                            Modifier
+                                .align(Alignment.BottomStart)
+                                .navigationBarsPadding()
+                                .padding(start = 12.dp, bottom = 8.dp),
                     )
                 }
             }
@@ -169,6 +188,78 @@ private fun CameraPreview(webRTCManager: WebRTCManager) {
                                 ),
                             ),
                         ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RotationQuaternionBadge(
+    rotationSensor: RotationSensor,
+    modifier: Modifier = Modifier,
+) {
+    val q by rotationSensor.deviceToArbitraryZVertical.collectAsState()
+    Column(
+        modifier =
+            modifier
+                .background(
+                    color = Color.Black.copy(alpha = 0.52f),
+                    shape = RoundedCornerShape(8.dp),
+                )
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = "w: ${formatQuaternionComponent(q.w)}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Text(
+            text = "x: ${formatQuaternionComponent(q.x)}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Text(
+            text = "y: ${formatQuaternionComponent(q.y)}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Text(
+            text = "z: ${formatQuaternionComponent(q.z)}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+}
+
+private fun formatQuaternionComponent(value: Double): String =
+    String.format(Locale.US, "%.5f", value)
+
+@Composable
+private fun WebRtcFpsBadge(webRTCManager: WebRTCManager, modifier: Modifier = Modifier) {
+    val cameraFps by webRTCManager.cameraFps.collectAsState()
+    val webRtcFps by webRTCManager.outboundFps.collectAsState()
+    val isActive by webRTCManager.isActive.collectAsState()
+
+    if (isActive) {
+        Column(
+            modifier =
+                modifier
+                    .background(
+                        color = Color.Black.copy(alpha = 0.52f),
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(
+                text = "Camera → WebRTC: $cameraFps FPS",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(
+                text = "WebRTC outbound: $webRtcFps FPS",
+                color = Color.White,
+                style = MaterialTheme.typography.labelLarge,
             )
         }
     }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import org.webrtc.CapturerObserver
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.DefaultVideoEncoderFactory
@@ -30,10 +31,12 @@ import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoFrame
 import org.webrtc.VideoSink
 import org.webrtc.VideoSource
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -50,6 +53,12 @@ class WebRTCManager(
 
     private val _isActive = MutableStateFlow(false)
     val isActive = _isActive.asStateFlow()
+
+    private val _outboundFps = MutableStateFlow(0)
+    val outboundFps = _outboundFps.asStateFlow()
+
+    private val _cameraFps = MutableStateFlow(0)
+    val cameraFps = _cameraFps.asStateFlow()
 
     private val eglBase = EglBase.create()
     private val eglBaseContext = eglBase.eglBaseContext
@@ -176,19 +185,28 @@ class WebRTCManager(
         val videoCapturer = CameraCapturer(context, cameraId)
         val surfaceTextureHelper =
             SurfaceTextureHelper.create("CaptureThread", eglBaseContext)
+        val deliveredFrameCounter = FpsCounter()
         videoCapturer.initialize(
             surfaceTextureHelper,
             context,
-            videoSource.capturerObserver
+            FrameCountingCapturerObserver(videoSource.capturerObserver, deliveredFrameCounter),
         )
 
         val cameraIntrinsic = cameraIntrinsicsForCamera(cameraId, VIDEO_WIDTH, VIDEO_HEIGHT)
 
         Log.i(TAG, "Starting video capturer...")
         videoCapturer.startCapture(VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS)
+        val cameraFpsJob = CoroutineScope(currentCoroutineContext()).launch {
+            while (isActive) {
+                delay(1.seconds)
+                _cameraFps.value = deliveredFrameCounter.reset()
+            }
+        }
         try {
             runPeerConnection(connectRequest, peerConnectionFactory, videoSource, cameraIntrinsic)
         } finally {
+            cameraFpsJob.cancel()
+            _cameraFps.value = 0
             videoCapturer.stopCapture()
             videoCapturer.dispose()
             Log.i(TAG, "Video capturer stopped")
@@ -206,6 +224,7 @@ class WebRTCManager(
         val rtcConfig = PeerConnection.RTCConfiguration(emptyList())
         rtcConfig.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+        rtcConfig.enableCpuOveruseDetection = false
 
         val observer =
             PeerConnectionHandler(this, cameraIntrinsic, currentCoroutineContext())
@@ -214,6 +233,13 @@ class WebRTCManager(
         this.peerConnection.set(peerConnection)
 
         observer.peerConnection = peerConnection
+
+        val statsJob = CoroutineScope(currentCoroutineContext()).launch {
+            while (isActive) {
+                delay(1.seconds)
+                _outboundFps.value = getOutboundVideoFps(peerConnection)
+            }
+        }
 
         try {
             Log.i(TAG, "Setting offer SDP...")
@@ -248,9 +274,44 @@ class WebRTCManager(
             Log.i(TAG, "WebRTC peer connection is complete")
 
         } finally {
+            statsJob.cancel()
+            _outboundFps.value = 0
             peerConnection.close()
             peerConnection.dispose()
             this.peerConnection.set(null)
+        }
+    }
+
+    private suspend fun getOutboundVideoFps(pc: PeerConnection): Int {
+        val report = suspendCancellableCoroutine { cont ->
+            pc.getStats { cont.resume(it) }
+        }
+        val outboundVideo = report.statsMap.values
+            .firstOrNull { it.type == "outbound-rtp" && it.members["kind"] == "video" }
+            ?: return 0
+        return (outboundVideo.members["framesPerSecond"] as? Number)?.toInt() ?: 0
+    }
+
+    private class FpsCounter {
+        private val count = AtomicInteger(0)
+
+        fun increment() { count.incrementAndGet() }
+
+        fun reset(): Int = count.getAndSet(0)
+    }
+
+    /** Counts frames passed through to [VideoSource] (after [CameraCapturer] processing). */
+    private class FrameCountingCapturerObserver(
+        private val delegate: CapturerObserver,
+        private val deliveredFrameCounter: FpsCounter,
+    ) : CapturerObserver {
+        override fun onCapturerStarted(success: Boolean) = delegate.onCapturerStarted(success)
+        override fun onCapturerStopped() = delegate.onCapturerStopped()
+        override fun onFrameCaptured(frame: VideoFrame?) {
+            if (frame != null) {
+                deliveredFrameCounter.increment()
+            }
+            delegate.onFrameCaptured(frame)
         }
     }
 
@@ -310,13 +371,14 @@ class WebRTCManager(
         val imageTx = activeTx / sensorPixelsPerImagePixel - (activeWidth / sensorPixelsPerImagePixel - imageWidth) * 0.5
         val imageTy = activeTy / sensorPixelsPerImagePixel - (activeHeight / sensorPixelsPerImagePixel - imageHeight) * 0.5
 
+        // FIXME: X/Y swap based on device orientation?
         return CameraIntrinsicJSON(
-            fx = imageFx,
-            fy = imageFy,
-            tx = imageTx,
-            ty = imageTy,
-            width = imageWidth,
-            height = imageHeight,
+            fx = imageFy,
+            fy = imageFx,
+            tx = imageTy,
+            ty = imageTx,
+            width = imageHeight,
+            height = imageWidth,
         )
     }
 
